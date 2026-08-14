@@ -45,11 +45,27 @@ static void my_application_activate(GApplication* application) {
   if (use_header_bar) {
     GtkHeaderBar* header_bar = GTK_HEADER_BAR(gtk_header_bar_new());
     gtk_widget_show(GTK_WIDGET(header_bar));
-    gtk_header_bar_set_title(header_bar, "qr_dinamico");
+    gtk_header_bar_set_title(header_bar, "QR Sucursal");
     gtk_header_bar_set_show_close_button(header_bar, TRUE);
     gtk_window_set_titlebar(window, GTK_WIDGET(header_bar));
   } else {
-    gtk_window_set_title(window, "qr_dinamico");
+    gtk_window_set_title(window, "QR Sucursal");
+  }
+
+  g_autoptr(GError) icon_error = nullptr;
+  g_autofree gchar* executable_path =
+      g_file_read_link("/proc/self/exe", &icon_error);
+  if (executable_path != nullptr) {
+    g_autofree gchar* executable_dir = g_path_get_dirname(executable_path);
+    g_autofree gchar* icon_path =
+        g_build_filename(executable_dir, "data", "app_icon.png", nullptr);
+    if (!gtk_window_set_icon_from_file(window, icon_path, &icon_error)) {
+      g_warning("No se pudo cargar el icono de la aplicación: %s",
+                icon_error->message);
+    }
+  } else {
+    g_warning("No se pudo localizar el ejecutable para cargar su icono: %s",
+              icon_error->message);
   }
 
   gtk_window_set_default_size(window, 1280, 720);

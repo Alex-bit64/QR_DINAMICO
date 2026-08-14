@@ -1,58 +1,93 @@
-# QR Dinámico - Requerimientos del Proyecto
+# QR Dinámico
 
-Este documento detalla los componentes y configuraciones necesarios para ejecutar y compilar el proyecto de QR Dinámico.
+Aplicación Flutter para mostrar el QR dinámico de una tienda. Funciona en
+Android, iOS, Windows, macOS y Linux con una única base de código responsiva.
 
-## 1. Entorno de Desarrollo (SDK)
-* **Flutter SDK:** ^3.11.5
-* **Dart SDK:** Incluido con la versión de Flutter mencionada.
-* **Plataformas Soportadas:** Android, iOS, Windows, Linux, Web.
+## Flujo de sesión
 
-## 2. Dependencias del Proyecto (pubspec.yaml)
-El proyecto utiliza los siguientes paquetes de Flutter:
-* `firebase_core`: Conexión base con Google Firebase.
-* `cloud_firestore`: Base de datos en tiempo real para tokens y datos de tienda.
-* `qr_flutter`: Generación visual de códigos QR.
-* `google_fonts`: Tipografías *Bebas Neue* y *Roboto Condensed*.
-* `shared_preferences`: Persistencia local de la sesión de la tienda.
-* `intl`: Formateo de fechas y tiempos.
+Antes de abrir el QR, la aplicación valida:
 
-## 3. Configuración de Firebase (Firestore)
-Para que la aplicación funcione, la base de datos en Firebase Console debe tener las siguientes colecciones:
+1. formato de correo y contraseña;
+2. credenciales y datos completos de la tienda en Supabase;
+3. existencia del token QR;
+4. servicio y permiso de ubicación;
+5. coordenadas válidas;
+6. disponibilidad de la sesión de la tienda.
 
-### Colección `tienda`
-Cada documento debe representar una sucursal con los campos:
-* `correo` (String): Email de acceso.
-* `password` (String): Contraseña de acceso.
-* `id_tienda` (String): Identificador único.
-* `nombre_tienda` (String).
-* `nombre_sede` (String).
-* `id_sede` (String).
-* `direccion` (String).
-* `usado` (Boolean): Control de sesión única.
+Con el QR abierto se ejecuta un pulso cada 15 segundos. Cada pulso obtiene una
+ubicación nueva y envía conjuntamente `id_tienda`, `session_id`, plataforma,
+latitud, longitud y precisión a Supabase. El servidor solo actualiza la fila si
+la sesión sigue siendo la propietaria de la tienda.
 
-### Colección `qr_activos`
-Documentos indexados por el `id_tienda`:
-* `activo` (Boolean).
-* `token` (String): Token dinámico de 32 caracteres.
-* `expira` (Timestamp): Tiempo de vida del QR.
-* `id_tienda` / `id_sede` / `nombre_tienda`: Metadatos del QR.
+La sesión persiste aunque la aplicación se cierre o el dispositivo se apague.
+Solo el botón **Cerrar sesión** libera la tienda en Supabase. Al volver a abrir
+la aplicación en el mismo dispositivo, se reutiliza el `session_id` almacenado
+localmente. Cuando la ubicación no puede comprobarse, el QR se oculta hasta que
+la validación vuelva a ser correcta, pero la sesión continúa reservada.
 
-## 4. Requerimientos de Compilación por OS
+La columna `qr.ubicacion` usa esta estructura:
 
-### Linux
-Es necesario instalar las bibliotecas de desarrollo de GTK y herramientas de build:
-```bash
-sudo apt-get install clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev
+```json
+{
+  "inicio_sesion": {
+    "latitud": -12.0,
+    "longitud": -77.0,
+    "precision_metros": 10.0,
+    "dispositivo": "windows",
+    "actualizada_en": "2026-07-22T12:00:00-05:00"
+  },
+  "actual": {
+    "latitud": -12.0,
+    "longitud": -77.0,
+    "precision_metros": 10.0,
+    "dispositivo": "windows",
+    "actualizada_en": "2026-07-22T12:00:15-05:00"
+  }
+}
 ```
 
-### Windows
-* **Visual Studio 2022:** Con la carga de trabajo "Desktop development with C++" instalada.
-* **Windows SDK:** Incluido con Visual Studio.
+`inicio_sesion` se fija al ingresar y `actual` se reemplaza en cada pulso. La
+clave antigua `horario_salida` se elimina de la fila cuando la sesión se
+renueva.
 
-## 5. Activos (Assets)
-El proyecto requiere la presencia de la imagen de fondo en:
-`lib/assets/fondo.png`
+## Configurar Supabase
 
-## 6. Ejecución
-1. Ejecutar `flutter pub get` para instalar dependencias.
-2. Ejecutar `flutter run` en el dispositivo o plataforma deseada.# Qr_Empresa
+Antes de ejecutar esta versión, abre el SQL Editor del proyecto Supabase y
+ejecuta el contenido completo de [`supabase_rpc.sql`](supabase_rpc.sql). La app
+y las funciones RPC deben actualizarse juntas porque cambian las firmas de:
+
+- `iniciar_sesion_tienda`
+- `renovar_sesion_tienda`
+
+El cliente usa una clave publicable. Nunca coloques una clave `service_role` o
+secreta dentro de Flutter.
+
+## Ejecutar
+
+```bash
+flutter pub get
+flutter run -d windows
+```
+
+También puedes usar `-d android`, `-d ios`, `-d macos` o `-d linux` en el
+sistema operativo correspondiente.
+
+Builds de escritorio:
+
+```bash
+flutter build windows
+flutter build macos
+flutter build linux
+```
+
+La ubicación del sistema debe estar activada. En Windows se controla desde
+Privacidad y seguridad > Ubicación; en macOS desde Privacidad y seguridad >
+Localización. Linux requiere que el servicio GeoClue esté disponible.
+
+## Verificación
+
+```bash
+flutter analyze
+flutter test
+flutter build windows
+```

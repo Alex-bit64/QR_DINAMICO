@@ -24,7 +24,11 @@ android {
         applicationId = "com.example.qr_dinamico"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
-        minSdk = flutter.minSdkVersion
+        // Mantener compatibilidad con equipos antiguos en el mínimo oficial
+        // soportado por esta versión de Flutter: Android 7.0 (API 24).
+        // Se fija explícitamente para evitar que una actualización del SDK
+        // cambie silenciosamente la base de dispositivos compatibles.
+        minSdk = 24
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName

@@ -1,10 +1,15 @@
+BEGIN;
+
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
 CREATE OR REPLACE FUNCTION public.generar_token_qr_tienda(
     p_id_tienda UUID
 ) RETURNS TEXT
 LANGUAGE sql
-IMMUTABLE
+VOLATILE
+SET search_path = public
 AS $$
-    SELECT md5(p_id_tienda::TEXT || ':qr_tienda:v1');
+    SELECT md5(p_id_tienda::TEXT || ':' || gen_random_uuid()::TEXT || ':' || clock_timestamp()::TEXT);
 $$;
 
 DROP TABLE IF EXISTS public.tienda_sesion_activa;
@@ -17,6 +22,50 @@ ADD COLUMN IF NOT EXISTS session_id TEXT;
 
 ALTER TABLE public.qr
 ADD COLUMN IF NOT EXISTS usado_expira_en TIMESTAMPTZ;
+
+ALTER TABLE public.qr
+ADD COLUMN IF NOT EXISTS ubicacion JSONB NOT NULL DEFAULT '{}'::jsonb;
+
+-- Las sesiones son persistentes: solo cerrar_sesion_tienda puede liberarlas.
+UPDATE public.qr
+SET usado_expira_en = NULL
+WHERE usado_expira_en IS NOT NULL;
+
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'qr'
+          AND column_name = 'latitud'
+    ) AND EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'qr'
+          AND column_name = 'longitud'
+    ) THEN
+        EXECUTE $sql$
+            UPDATE public.qr
+            SET ubicacion = jsonb_set(
+                COALESCE(ubicacion, '{}'::jsonb),
+                '{horario_salida}',
+                jsonb_build_object('latitud', latitud, 'longitud', longitud),
+                true
+            )
+            WHERE (latitud IS NOT NULL OR longitud IS NOT NULL)
+              AND NOT (COALESCE(ubicacion, '{}'::jsonb) ? 'horario_salida')
+        $sql$;
+    END IF;
+END;
+$$;
+
+ALTER TABLE public.qr
+DROP COLUMN IF EXISTS latitud;
+
+ALTER TABLE public.qr
+DROP COLUMN IF EXISTS longitud;
 
 CREATE OR REPLACE FUNCTION public.generar_payload_qr_tienda(
     p_token TEXT,
@@ -45,25 +94,19 @@ SET search_path = public
 AS $$
 DECLARE
     v_payload TEXT := trim(COALESCE(p_payload, ''));
-    v_qr public.qr%ROWTYPE;
     v_slot_actual BIGINT := floor(extract(epoch FROM NOW()) / 30)::BIGINT;
     v_slot BIGINT;
 BEGIN
-    SELECT q.*
-    INTO v_qr
-    FROM public.qr q
-    INNER JOIN public.tienda t ON t.id_tienda = q.id_tienda
-    WHERE q.id_tienda = p_id_tienda
-      AND t.estado = TRUE
-    ORDER BY q.fecha_creada DESC
-    LIMIT 1;
-
-    IF v_qr.id IS NULL THEN
-        RETURN FALSE;
-    END IF;
-
-    FOR v_slot IN (v_slot_actual - 1)..(v_slot_actual + 1) LOOP
-        IF v_payload = public.generar_payload_qr_tienda(v_qr.token, v_slot) THEN
+    FOR v_slot IN (v_slot_actual - 2)..(v_slot_actual + 2) LOOP
+        IF EXISTS (
+            SELECT 1
+            FROM public.qr q
+            INNER JOIN public.tienda t ON t.id_tienda = q.id_tienda
+            WHERE q.id_tienda = p_id_tienda
+              AND t.estado = TRUE
+              AND q.usado = TRUE
+              AND v_payload = public.generar_payload_qr_tienda(q.token, v_slot)
+        ) THEN
             RETURN TRUE;
         END IF;
     END LOOP;
@@ -167,10 +210,22 @@ BEGIN
 END;
 $$;
 
+DROP FUNCTION IF EXISTS public.iniciar_sesion_tienda(UUID, TEXT, TEXT);
+DROP FUNCTION IF EXISTS public.iniciar_sesion_tienda(
+    UUID,
+    TEXT,
+    TEXT,
+    DOUBLE PRECISION,
+    DOUBLE PRECISION
+);
+
 CREATE OR REPLACE FUNCTION public.iniciar_sesion_tienda(
     p_id_tienda UUID,
     p_session_id TEXT,
-    p_dispositivo TEXT DEFAULT NULL
+    p_dispositivo TEXT,
+    p_latitud DOUBLE PRECISION,
+    p_longitud DOUBLE PRECISION,
+    p_precision_metros DOUBLE PRECISION
 ) RETURNS TABLE (
     permitido BOOLEAN,
     mensaje TEXT,
@@ -187,12 +242,48 @@ BEGIN
         RAISE EXCEPTION 'Session id requerido.';
     END IF;
 
+    IF p_latitud IS NULL OR p_latitud < -90 OR p_latitud > 90 THEN
+        RAISE EXCEPTION 'Latitud fuera de rango.';
+    END IF;
+
+    IF p_longitud IS NULL OR p_longitud < -180 OR p_longitud > 180 THEN
+        RAISE EXCEPTION 'Longitud fuera de rango.';
+    END IF;
+
+    IF p_precision_metros IS NULL
+       OR p_precision_metros < 0
+       OR p_precision_metros > 100000 THEN
+        RAISE EXCEPTION 'Precision de ubicacion fuera de rango.';
+    END IF;
+
+    IF p_dispositivo IS NULL OR trim(p_dispositivo) = '' THEN
+        RAISE EXCEPTION 'Dispositivo requerido.';
+    END IF;
+
     PERFORM public.obtener_o_crear_qr_tienda(p_id_tienda);
 
     UPDATE public.qr q
     SET usado = TRUE,
         session_id = v_session_id,
-        usado_expira_en = NULL
+        usado_expira_en = NULL,
+        ubicacion = jsonb_build_object(
+            'inicio_sesion',
+            jsonb_build_object(
+                'latitud', p_latitud,
+                'longitud', p_longitud,
+                'precision_metros', p_precision_metros,
+                'dispositivo', trim(p_dispositivo),
+                'actualizada_en', NOW()
+            ),
+            'actual',
+            jsonb_build_object(
+                'latitud', p_latitud,
+                'longitud', p_longitud,
+                'precision_metros', p_precision_metros,
+                'dispositivo', trim(p_dispositivo),
+                'actualizada_en', NOW()
+            )
+        )
     WHERE q.id_tienda = p_id_tienda
       AND (
           q.usado = FALSE
@@ -219,9 +310,42 @@ BEGIN
 END;
 $$;
 
+-- Compatibilidad temporal con clientes instalados que todavía no envían la
+-- precisión. Los clientes nuevos usan la firma de seis argumentos.
+CREATE OR REPLACE FUNCTION public.iniciar_sesion_tienda(
+    p_id_tienda UUID,
+    p_session_id TEXT,
+    p_dispositivo TEXT,
+    p_latitud DOUBLE PRECISION,
+    p_longitud DOUBLE PRECISION
+) RETURNS TABLE (
+    permitido BOOLEAN,
+    mensaje TEXT,
+    expira_en TIMESTAMPTZ
+) LANGUAGE sql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+    SELECT *
+    FROM public.iniciar_sesion_tienda(
+        p_id_tienda,
+        p_session_id,
+        p_dispositivo,
+        p_latitud,
+        p_longitud,
+        0::DOUBLE PRECISION
+    );
+$$;
+
+DROP FUNCTION IF EXISTS public.renovar_sesion_tienda(UUID, TEXT);
+
 CREATE OR REPLACE FUNCTION public.renovar_sesion_tienda(
     p_id_tienda UUID,
-    p_session_id TEXT
+    p_session_id TEXT,
+    p_dispositivo TEXT,
+    p_latitud DOUBLE PRECISION,
+    p_longitud DOUBLE PRECISION,
+    p_precision_metros DOUBLE PRECISION
 ) RETURNS TABLE (
     permitido BOOLEAN,
     mensaje TEXT,
@@ -234,11 +358,94 @@ DECLARE
     v_session_id TEXT := trim(p_session_id);
     v_expira_en TIMESTAMPTZ;
 BEGIN
+    IF v_session_id IS NULL OR v_session_id = '' THEN
+        RAISE EXCEPTION 'Session id requerido.';
+    END IF;
+
+    IF p_latitud IS NULL OR p_latitud < -90 OR p_latitud > 90 THEN
+        RAISE EXCEPTION 'Latitud fuera de rango.';
+    END IF;
+
+    IF p_longitud IS NULL OR p_longitud < -180 OR p_longitud > 180 THEN
+        RAISE EXCEPTION 'Longitud fuera de rango.';
+    END IF;
+
+    IF p_precision_metros IS NULL
+       OR p_precision_metros < 0
+       OR p_precision_metros > 100000 THEN
+        RAISE EXCEPTION 'Precision de ubicacion fuera de rango.';
+    END IF;
+
+    IF p_dispositivo IS NULL OR trim(p_dispositivo) = '' THEN
+        RAISE EXCEPTION 'Dispositivo requerido.';
+    END IF;
+
+    UPDATE public.qr q
+    SET usado = TRUE,
+        usado_expira_en = NULL,
+        ubicacion = jsonb_set(
+            jsonb_set(
+                COALESCE(q.ubicacion, '{}'::jsonb) - 'horario_salida',
+                '{inicio_sesion}',
+                COALESCE(
+                    q.ubicacion -> 'inicio_sesion',
+                    jsonb_build_object(
+                        'latitud', p_latitud,
+                        'longitud', p_longitud,
+                        'precision_metros', p_precision_metros,
+                        'dispositivo', trim(p_dispositivo),
+                        'actualizada_en', NOW()
+                    )
+                ),
+                TRUE
+            ),
+            '{actual}',
+            jsonb_build_object(
+                'latitud', p_latitud,
+                'longitud', p_longitud,
+                'precision_metros', p_precision_metros,
+                'dispositivo', trim(p_dispositivo),
+                'actualizada_en', NOW()
+            ),
+            TRUE
+        )
+    WHERE q.id_tienda = p_id_tienda
+      AND q.session_id = v_session_id
+      AND q.usado = TRUE
+    RETURNING q.usado_expira_en INTO v_expira_en;
+
+    IF FOUND THEN
+        RETURN QUERY
+        SELECT TRUE, 'Sesion renovada.', v_expira_en;
+        RETURN;
+    END IF;
+
+    RETURN QUERY
+    SELECT FALSE, 'La sesion de esta tienda ya no esta activa.', NULL::TIMESTAMPTZ;
+END;
+$$;
+
+-- Compatibilidad temporal con la app anterior. Mantiene la sesión, pero
+-- solo la firma nueva puede actualizar la ubicación en cada pulso.
+CREATE OR REPLACE FUNCTION public.renovar_sesion_tienda(
+    p_id_tienda UUID,
+    p_session_id TEXT
+) RETURNS TABLE (
+    permitido BOOLEAN,
+    mensaje TEXT,
+    expira_en TIMESTAMPTZ
+) LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+    v_expira_en TIMESTAMPTZ;
+BEGIN
     UPDATE public.qr q
     SET usado = TRUE,
         usado_expira_en = NULL
     WHERE q.id_tienda = p_id_tienda
-      AND q.session_id = v_session_id
+      AND q.session_id = trim(p_session_id)
       AND q.usado = TRUE
     RETURNING q.usado_expira_en INTO v_expira_en;
 
@@ -364,11 +571,6 @@ BEGIN
         INSERT INTO public.qr (id_tienda, token)
         VALUES (p_id_tienda, v_token)
         RETURNING * INTO v_qr;
-    ELSIF v_qr.token IS DISTINCT FROM v_token THEN
-        UPDATE public.qr q
-        SET token = v_token
-        WHERE q.id = v_qr.id
-        RETURNING * INTO v_qr;
     END IF;
 
     RETURN QUERY
@@ -473,6 +675,7 @@ BEGIN
         INNER JOIN public.tienda ti ON ti.id_tienda = q.id_tienda
         WHERE q.token = trim(p_token)
           AND q.id_tienda = v_id_tienda
+          AND q.usado = TRUE
           AND ti.estado = TRUE
         )
     ) THEN
@@ -550,8 +753,10 @@ REVOKE ALL ON FUNCTION public.payload_qr_valido_tienda(TEXT, UUID) FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.obtener_tienda_por_correo(TEXT) FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.obtener_tienda_por_id(UUID) FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.login_tienda(TEXT, TEXT) FROM PUBLIC;
-REVOKE ALL ON FUNCTION public.iniciar_sesion_tienda(UUID, TEXT, TEXT) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.iniciar_sesion_tienda(UUID, TEXT, TEXT, DOUBLE PRECISION, DOUBLE PRECISION) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.iniciar_sesion_tienda(UUID, TEXT, TEXT, DOUBLE PRECISION, DOUBLE PRECISION, DOUBLE PRECISION) FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.renovar_sesion_tienda(UUID, TEXT) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.renovar_sesion_tienda(UUID, TEXT, TEXT, DOUBLE PRECISION, DOUBLE PRECISION, DOUBLE PRECISION) FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.cerrar_sesion_tienda(UUID, TEXT) FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.obtener_qr_tienda(UUID) FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.obtener_payload_qr_tienda(UUID, TEXT) FROM PUBLIC;
@@ -563,8 +768,10 @@ GRANT EXECUTE ON FUNCTION public.generar_token_qr_tienda(UUID) TO anon, authenti
 GRANT EXECUTE ON FUNCTION public.obtener_tienda_por_correo(TEXT) TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.obtener_tienda_por_id(UUID) TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.login_tienda(TEXT, TEXT) TO anon, authenticated;
-GRANT EXECUTE ON FUNCTION public.iniciar_sesion_tienda(UUID, TEXT, TEXT) TO anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.iniciar_sesion_tienda(UUID, TEXT, TEXT, DOUBLE PRECISION, DOUBLE PRECISION) TO anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.iniciar_sesion_tienda(UUID, TEXT, TEXT, DOUBLE PRECISION, DOUBLE PRECISION, DOUBLE PRECISION) TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.renovar_sesion_tienda(UUID, TEXT) TO anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.renovar_sesion_tienda(UUID, TEXT, TEXT, DOUBLE PRECISION, DOUBLE PRECISION, DOUBLE PRECISION) TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.cerrar_sesion_tienda(UUID, TEXT) TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.obtener_qr_tienda(UUID) TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.obtener_payload_qr_tienda(UUID, TEXT) TO anon, authenticated;
@@ -573,3 +780,5 @@ GRANT EXECUTE ON FUNCTION public.obtener_horario_trabajador(TEXT, TEXT) TO anon,
 GRANT EXECUTE ON FUNCTION public.registrar_marcacion_asistencia(TEXT, TIMESTAMPTZ, TEXT) TO anon, authenticated;
 
 NOTIFY pgrst, 'reload schema';
+
+COMMIT;

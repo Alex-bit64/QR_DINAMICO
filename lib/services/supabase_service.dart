@@ -1,3 +1,6 @@
+import 'dart:convert';
+
+import 'package:crypto/crypto.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 class SupabaseService {
@@ -83,10 +86,26 @@ class SupabaseService {
     return data;
   }
 
+  String generarPayloadQrDinamico({
+    required String token,
+    DateTime? fechaHora,
+  }) {
+    final timestamp = (fechaHora ?? DateTime.now()).millisecondsSinceEpoch;
+    final slot = timestamp ~/ const Duration(seconds: 30).inMilliseconds;
+    final firma = md5
+        .convert(utf8.encode('${token.trim()}:$slot:qr_dinamico:v2'))
+        .toString();
+
+    return 'app-qr-dinamico://$slot/$firma';
+  }
+
   Future<Map<String, dynamic>> iniciarSesionTienda({
     required String idTienda,
     required String sessionId,
-    String? dispositivo,
+    required String dispositivo,
+    required double latitud,
+    required double longitud,
+    required double precisionMetros,
   }) async {
     final data = await _rpcMaybeSingle(
       'iniciar_sesion_tienda',
@@ -94,6 +113,9 @@ class SupabaseService {
         'p_id_tienda': idTienda,
         'p_session_id': sessionId,
         'p_dispositivo': dispositivo,
+        'p_latitud': latitud,
+        'p_longitud': longitud,
+        'p_precision_metros': precisionMetros,
       },
     );
 
@@ -104,7 +126,34 @@ class SupabaseService {
     return data;
   }
 
-  Future<bool> renovarSesionTienda({
+  Future<Map<String, dynamic>> renovarSesionTienda({
+    required String idTienda,
+    required String sessionId,
+    required String dispositivo,
+    required double latitud,
+    required double longitud,
+    required double precisionMetros,
+  }) async {
+    final data = await _rpcMaybeSingle(
+      'renovar_sesion_tienda',
+      params: {
+        'p_id_tienda': idTienda,
+        'p_session_id': sessionId,
+        'p_dispositivo': dispositivo,
+        'p_latitud': latitud,
+        'p_longitud': longitud,
+        'p_precision_metros': precisionMetros,
+      },
+    );
+
+    if (data == null) {
+      throw Exception('No se pudo renovar la sesión de tienda.');
+    }
+
+    return data;
+  }
+
+  Future<Map<String, dynamic>> validarSesionTienda({
     required String idTienda,
     required String sessionId,
   }) async {
@@ -113,7 +162,11 @@ class SupabaseService {
       params: {'p_id_tienda': idTienda, 'p_session_id': sessionId},
     );
 
-    return data?['permitido'] == true;
+    if (data == null) {
+      throw Exception('No se pudo validar la sesión de tienda.');
+    }
+
+    return data;
   }
 
   Future<void> cerrarSesionTienda({
