@@ -316,9 +316,18 @@ REVOKE ALL ON FUNCTION public.obtener_qr_tienda(UUID)
 FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION public.obtener_o_crear_qr_tienda(UUID)
 FROM PUBLIC, anon, authenticated;
-REVOKE ALL ON FUNCTION public.registrar_marcacion_asistencia(
-    TEXT, TIMESTAMPTZ, TEXT
-) FROM PUBLIC, anon, authenticated;
+-- Esta función no existe en todas las instalaciones. REVOKE falla con 42883
+-- cuando la firma está ausente y abortaría toda la transacción, por lo que la
+-- protegemos de forma condicional.
+DO $$
+BEGIN
+    IF pg_catalog.to_regprocedure(
+        'public.registrar_marcacion_asistencia(text,timestamp with time zone,text)'
+    ) IS NOT NULL THEN
+        EXECUTE 'REVOKE ALL ON FUNCTION public.registrar_marcacion_asistencia(text,timestamp with time zone,text) FROM PUBLIC, anon, authenticated';
+    END IF;
+END;
+$$;
 
 NOTIFY pgrst, 'reload schema';
 
