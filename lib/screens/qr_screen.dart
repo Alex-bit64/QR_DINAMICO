@@ -4,9 +4,9 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:qr_flutter/qr_flutter.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
 import '../app_visuals.dart';
+import '../services/sesion_local_service.dart';
 import '../services/supabase_service.dart';
 import '../services/ubicacion_service.dart';
 import 'login_tienda_screen.dart';
@@ -17,7 +17,6 @@ class QRScreen extends StatefulWidget {
   final String direccion;
   final String correo;
   final String sessionId;
-  final String? qrToken;
 
   const QRScreen({
     super.key,
@@ -26,7 +25,6 @@ class QRScreen extends StatefulWidget {
     required this.direccion,
     required this.correo,
     required this.sessionId,
-    this.qrToken,
   });
 
   @override
@@ -36,10 +34,11 @@ class QRScreen extends StatefulWidget {
 class _QRScreenState extends State<QRScreen> with WidgetsBindingObserver {
   final _supabaseService = SupabaseService.instance;
   final _ubicacionService = UbicacionService.instance;
+  final _sesionLocalService = SesionLocalService.instance;
 
   String _qrData = '';
-  String? _qrToken;
   bool _cargando = true;
+  bool _generandoQr = false;
   bool _renovandoSesion = false;
   bool _sesionValida = true;
   String? _errorQr;
@@ -52,8 +51,7 @@ class _QRScreenState extends State<QRScreen> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    _qrToken = widget.qrToken;
-    _prepararQr();
+    unawaited(_prepararQr());
     _iniciarTimers();
   }
 
@@ -68,7 +66,14 @@ class _QRScreenState extends State<QRScreen> with WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
-      _renovarSesion();
+      unawaited(_reanudar());
+    }
+  }
+
+  Future<void> _reanudar() async {
+    await _renovarSesion();
+    if (mounted && _sesionValida) {
+      await _prepararQr(mostrarCarga: false);
     }
   }
 
@@ -79,14 +84,14 @@ class _QRScreenState extends State<QRScreen> with WidgetsBindingObserver {
     _timerQr = Timer.periodic(const Duration(seconds: 1), (_) {
       if (!mounted || _cargando || _errorQr != null) return;
       if (_segundosRestantes <= 1) {
-        _prepararQr(mostrarCarga: false);
+        unawaited(_prepararQr(mostrarCarga: false));
       } else {
         setState(() => _segundosRestantes--);
       }
     });
 
     _timerSesion = Timer.periodic(const Duration(seconds: 15), (_) {
-      _renovarSesion();
+      unawaited(_renovarSesion());
     });
   }
 
@@ -157,37 +162,38 @@ class _QRScreenState extends State<QRScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _prepararQr({bool mostrarCarga = true}) async {
-    if (!_sesionValida) return;
+    if (!_sesionValida || _generandoQr || !mounted) return;
+    _generandoQr = true;
     setState(() {
       _cargando = mostrarCarga;
       _errorQr = null;
     });
 
     try {
-      if (_qrToken == null || _qrToken!.isEmpty) {
-        final qr = await _supabaseService.asegurarQrEstatico(
-          idTienda: widget.idTienda,
-        );
-        _qrToken = qr['token']?.toString();
-        await _guardarQrTokenLocal(_qrToken);
-      }
-
-      if (_qrToken == null || _qrToken!.isEmpty) {
-        throw Exception('No se encontro token QR para esta tienda.');
-      }
+      final qr = await _supabaseService.obtenerPayloadQrTienda(
+        idTienda: widget.idTienda,
+        sessionId: widget.sessionId,
+      );
+      final payload = qr['payload']?.toString().trim() ?? '';
+      if (payload.isEmpty) throw Exception('El QR temporal llegó vacío.');
 
       if (!mounted) return;
       setState(() {
-        _qrData = _supabaseService.generarPayloadQrDinamico(token: _qrToken!);
+        _qrData = payload;
         _segundosRestantes = 30;
         _cargando = false;
       });
-    } catch (e) {
+    } catch (_) {
       if (!mounted) return;
       setState(() {
-        _errorQr = 'No se pudo preparar el QR: $e';
+        _qrData = '';
+        _errorQr =
+            'No se pudo obtener un QR actualizado. Revisa la conexión; la '
+            'aplicación volverá a intentarlo.';
         _cargando = false;
       });
+    } finally {
+      _generandoQr = false;
     }
   }
 
@@ -199,7 +205,7 @@ class _QRScreenState extends State<QRScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _volverAlLogin({String? mensaje}) async {
-    await _limpiarSesionLocal();
+    await _sesionLocalService.limpiar();
     if (!mounted) return;
     Navigator.pushReplacement(
       context,
@@ -210,7 +216,8 @@ class _QRScreenState extends State<QRScreen> with WidgetsBindingObserver {
   }
 
   String _mensajeError(Object error) {
-    return error.toString().replaceFirst('Exception: ', '');
+    if (error is UbicacionException) return error.mensaje;
+    return 'No se pudo comunicar con el servidor.';
   }
 
   Future<void> _cerrarSesion() async {
@@ -269,22 +276,6 @@ class _QRScreenState extends State<QRScreen> with WidgetsBindingObserver {
         ),
       );
     }
-  }
-
-  Future<void> _limpiarSesionLocal() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.remove('id_tienda');
-    await prefs.remove('nombre');
-    await prefs.remove('direccion');
-    await prefs.remove('correo');
-    await prefs.remove('tienda_session_id');
-    await prefs.remove('qr_token');
-  }
-
-  Future<void> _guardarQrTokenLocal(String? qrToken) async {
-    if (qrToken == null || qrToken.isEmpty) return;
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('qr_token', qrToken);
   }
 
   @override

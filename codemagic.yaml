@@ -1,0 +1,38 @@
+workflows:
+  ios-test-build:
+    name: iOS Test Build Sin Firma
+    max_build_duration: 120
+    instance_type: mac_mini_m2
+    environment:
+      flutter: 3.41.9
+      xcode: latest
+      cocoapods: default
+    cache:
+      cache_paths:
+        - $FLUTTER_ROOT/.pub-cache
+    scripts:
+      - name: Verificar Flutter y Xcode
+        script: |
+          flutter --version
+          xcodebuild -version
+
+      - name: Instalar dependencias Flutter
+        script: flutter pub get --enforce-lockfile
+
+      - name: Analizar código
+        script: flutter analyze
+
+      - name: Ejecutar pruebas
+        script: flutter test
+
+      - name: Instalar CocoaPods
+        script: |
+          cd ios
+          pod install
+
+      - name: Compilar iOS sin firma
+        script: flutter build ios --release --no-codesign
+
+    artifacts:
+      - build/ios/iphoneos/Runner.app
+      - /tmp/xcodebuild_logs/*.log

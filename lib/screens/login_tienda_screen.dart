@@ -1,10 +1,11 @@
+import 'dart:convert';
 import 'dart:math';
 
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
 import '../app_visuals.dart';
+import '../services/sesion_local_service.dart';
 import '../services/supabase_service.dart';
 import '../services/ubicacion_service.dart';
 import 'qr_screen.dart';
@@ -23,6 +24,7 @@ class _LoginTiendaScreenState extends State<LoginTiendaScreen> {
   final _passwordController = TextEditingController();
   final _supabaseService = SupabaseService.instance;
   final _ubicacionService = UbicacionService.instance;
+  final _sesionLocalService = SesionLocalService.instance;
 
   bool _cargando = true;
   bool _procesando = false;
@@ -41,28 +43,19 @@ class _LoginTiendaScreenState extends State<LoginTiendaScreen> {
   }
 
   Future<void> _verificarSesionGuardada() async {
-    final prefs = await SharedPreferences.getInstance();
-    final idTienda = prefs.getString('id_tienda');
-    final sessionId = prefs.getString('tienda_session_id');
-
-    if (idTienda != null &&
-        idTienda.isNotEmpty &&
-        sessionId != null &&
-        sessionId.isNotEmpty) {
-      try {
-        final validacion = await _supabaseService.validarSesionTienda(
-          idTienda: idTienda,
-          sessionId: sessionId,
+    try {
+      final sesionLocal = await _sesionLocalService.cargar();
+      if (sesionLocal != null) {
+        final tiendaActual = await _supabaseService.obtenerTiendaSesion(
+          idTienda: sesionLocal.idTienda,
+          sessionId: sesionLocal.sessionId,
         );
-        if (validacion['permitido'] != true) {
+        if (tiendaActual == null) {
           await _limpiarSesionLocal();
           if (mounted) {
             setState(() {
               _cargando = false;
-              _mensajeValidacion =
-                  (validacion['mensaje'] ??
-                          'La sesión fue cerrada desde Supabase.')
-                      .toString();
+              _mensajeValidacion = 'La sesión fue cerrada desde Supabase.';
             });
           }
           return;
@@ -70,8 +63,8 @@ class _LoginTiendaScreenState extends State<LoginTiendaScreen> {
 
         final ubicacion = await _ubicacionService.obtenerActual();
         final sesion = await _supabaseService.renovarSesionTienda(
-          idTienda: idTienda,
-          sessionId: sessionId,
+          idTienda: sesionLocal.idTienda,
+          sessionId: sesionLocal.sessionId,
           dispositivo: _ubicacionService.dispositivo,
           latitud: ubicacion.latitude,
           longitud: ubicacion.longitude,
@@ -90,63 +83,40 @@ class _LoginTiendaScreenState extends State<LoginTiendaScreen> {
           return;
         }
 
-        final tiendaActual = await _supabaseService.buscarTiendaPorId(idTienda);
-        if (tiendaActual == null) {
-          throw Exception('No se encontraron los datos de la tienda.');
-        }
         _validarDatosTienda(tiendaActual);
-
-        final qr = await _supabaseService.asegurarQrEstatico(
-          idTienda: idTienda,
+        await _guardarSesionLocal(
+          tiendaActual,
+          sessionId: sesionLocal.sessionId,
         );
-        final qrToken = _validarQr(qr);
-        await _guardarSesionLocal(tiendaActual, qrToken: qrToken);
         if (!mounted) return;
-        _abrirQr(tiendaActual, sessionId, qrToken: qrToken);
-        return;
-      } catch (error) {
-        if (mounted) {
-          setState(() {
-            _cargando = false;
-            _mensajeValidacion =
-                'No se restauró la sesión: ${_mensajeError(error)}';
-          });
-        }
+        _abrirQr(tiendaActual, sesionLocal.sessionId);
         return;
       }
-    }
 
-    if (mounted) {
-      setState(() => _cargando = false);
+      if (mounted) setState(() => _cargando = false);
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _cargando = false;
+        _mensajeValidacion = error is UbicacionException
+            ? error.mensaje
+            : 'No se pudo comprobar la sesión guardada. Revisa tu conexión.';
+      });
     }
   }
 
   Future<void> _limpiarSesionLocal() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.remove('id_tienda');
-    await prefs.remove('nombre');
-    await prefs.remove('direccion');
-    await prefs.remove('correo');
-    await prefs.remove('tienda_session_id');
-    await prefs.remove('qr_token');
+    await _sesionLocalService.limpiar();
   }
 
   Future<void> _guardarSesionLocal(
     Map<String, dynamic> tienda, {
-    String? sessionId,
-    String? qrToken,
+    required String sessionId,
   }) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('id_tienda', tienda['id_tienda'] as String);
-    await prefs.setString('nombre', tienda['nombre'] as String);
-    await prefs.setString('direccion', tienda['direccion'] as String);
-    await prefs.setString('correo', tienda['correo'] as String);
-    if (sessionId != null) {
-      await prefs.setString('tienda_session_id', sessionId);
-    }
-    if (qrToken != null && qrToken.isNotEmpty) {
-      await prefs.setString('qr_token', qrToken);
-    }
+    await _sesionLocalService.guardar(
+      idTienda: tienda['id_tienda'] as String,
+      sessionId: sessionId,
+    );
   }
 
   Future<void> _ingresar() async {
@@ -168,26 +138,11 @@ class _LoginTiendaScreenState extends State<LoginTiendaScreen> {
     });
 
     try {
-      final tienda = await _supabaseService.loginTienda(
+      final ubicacion = await _ubicacionService.obtenerActual();
+      final sessionId = _crearSessionId();
+      final resultado = await _supabaseService.iniciarSesionTiendaSegura(
         correo: correoIngresado,
         contrasena: passwordIngresado,
-      );
-
-      if (tienda == null) {
-        _mostrarMensaje('Correo o contraseña incorrectos.');
-        return;
-      }
-      _validarDatosTienda(tienda);
-
-      final qr = await _supabaseService.asegurarQrEstatico(
-        idTienda: tienda['id_tienda'] as String,
-      );
-      final qrToken = _validarQr(qr);
-      final ubicacion = await _ubicacionService.obtenerActual();
-
-      final sessionId = _crearSessionId();
-      final sesion = await _supabaseService.iniciarSesionTienda(
-        idTienda: tienda['id_tienda'] as String,
         sessionId: sessionId,
         dispositivo: _ubicacionService.dispositivo,
         latitud: ubicacion.latitude,
@@ -195,19 +150,24 @@ class _LoginTiendaScreenState extends State<LoginTiendaScreen> {
         precisionMetros: ubicacion.accuracy,
       );
 
-      if (sesion['permitido'] != true) {
+      if (resultado['permitido'] != true) {
         _mostrarMensaje(
-          (sesion['mensaje'] ?? 'Esta tienda ya esta abierta.').toString(),
+          (resultado['mensaje'] ?? 'No se pudo iniciar la sesión.').toString(),
         );
         return;
       }
 
-      await _guardarSesionLocal(tienda, sessionId: sessionId, qrToken: qrToken);
+      _validarDatosTienda(resultado);
+      await _guardarSesionLocal(resultado, sessionId: sessionId);
 
       if (!mounted) return;
-      _abrirQr(tienda, sessionId, qrToken: qrToken);
+      _abrirQr(resultado, sessionId);
     } catch (e) {
-      _mostrarMensaje('Error iniciando sesion: ${_mensajeError(e)}');
+      _mostrarMensaje(
+        e is UbicacionException
+            ? e.mensaje
+            : 'No se pudo iniciar sesión. Revisa la conexión e inténtalo otra vez.',
+      );
     } finally {
       if (mounted) {
         setState(() => _procesando = false);
@@ -223,8 +183,8 @@ class _LoginTiendaScreenState extends State<LoginTiendaScreen> {
     if (!correoValido || correo.length > 150) {
       return 'Ingresa un correo válido.';
     }
-    if (contrasena.length > 256) {
-      return 'La contraseña ingresada no es válida.';
+    if (utf8.encode(contrasena).length > 72) {
+      return 'La contraseña no puede superar 72 bytes.';
     }
     return null;
   }
@@ -247,29 +207,13 @@ class _LoginTiendaScreenState extends State<LoginTiendaScreen> {
     }
   }
 
-  String _validarQr(Map<String, dynamic> qr) {
-    final token = (qr['token'] ?? '').toString().trim();
-    if (token.isEmpty) {
-      throw Exception('La tienda no tiene un token QR válido.');
-    }
-    return token;
-  }
-
-  String _mensajeError(Object error) {
-    return error.toString().replaceFirst('Exception: ', '');
-  }
-
   String _crearSessionId() {
     const chars = 'abcdef0123456789';
     final random = Random.secure();
     return List.generate(32, (_) => chars[random.nextInt(chars.length)]).join();
   }
 
-  void _abrirQr(
-    Map<String, dynamic> tienda,
-    String sessionId, {
-    String? qrToken,
-  }) {
+  void _abrirQr(Map<String, dynamic> tienda, String sessionId) {
     Navigator.pushReplacement(
       context,
       MaterialPageRoute(
@@ -279,7 +223,6 @@ class _LoginTiendaScreenState extends State<LoginTiendaScreen> {
           direccion: tienda['direccion'] as String,
           correo: tienda['correo'] as String,
           sessionId: sessionId,
-          qrToken: qrToken,
         ),
       ),
     );

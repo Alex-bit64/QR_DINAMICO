@@ -30,6 +30,9 @@ Flutter ni por las versiones actuales de varios plugins del proyecto.
 - Versión mínima configurada: iOS 13.
 - Por ejemplo, un iPhone 6s de 2015 puede ejecutar versiones de iOS superiores
   a ese mínimo.
+- El proyecto se compila en macOS mediante el flujo `ios-test-build` de
+  Codemagic. El artefacto sin firma valida compilación; instalarlo exige firma
+  y un perfil de aprovisionamiento de Apple.
 
 La antigüedad del dispositivo no garantiza por sí sola la compatibilidad. La
 versión del sistema operativo, la arquitectura y la disponibilidad de ubicación

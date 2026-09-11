@@ -1,6 +1,3 @@
-import 'dart:convert';
-
-import 'package:crypto/crypto.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 class SupabaseService {
@@ -10,64 +7,81 @@ class SupabaseService {
 
   SupabaseClient get _client => Supabase.instance.client;
 
-  Future<Map<String, dynamic>?> buscarTiendaPorCorreo(String correo) async {
-    final correoNormalizado = correo.trim().toLowerCase();
-    final data = await _rpcMaybeSingle(
-      'obtener_tienda_por_correo',
-      params: {'p_correo': correoNormalizado},
-    );
-
-    if (data == null) {
-      return null;
-    }
-
-    return _mapearTienda(data);
-  }
-
-  Future<Map<String, dynamic>?> buscarTiendaPorId(String idTienda) async {
-    final data = await _rpcMaybeSingle(
-      'obtener_tienda_por_id',
-      params: {'p_id_tienda': idTienda},
-    );
-
-    if (data == null) {
-      return null;
-    }
-
-    return _mapearTienda(data);
-  }
-
-  Future<Map<String, dynamic>?> loginTienda({
+  /// Autentica y toma la sesión de la tienda en una única operación atómica.
+  ///
+  /// El fallback mantiene operativa la app mientras se despliega la migración
+  /// nueva. Después del despliegue, los RPC heredados quedan sin permiso para
+  /// clientes anónimos y solo se utiliza la ruta segura.
+  Future<Map<String, dynamic>> iniciarSesionTiendaSegura({
     required String correo,
     required String contrasena,
+    required String sessionId,
+    required String dispositivo,
+    required double latitud,
+    required double longitud,
+    required double precisionMetros,
   }) async {
-    final data = await _rpcMaybeSingle(
-      'login_tienda',
-      params: {
-        'p_correo': correo.trim().toLowerCase(),
-        'p_contrasena': contrasena.trim(),
-      },
-    );
-    if (data == null) {
-      return null;
+    try {
+      final data = await _rpcMaybeSingle(
+        'iniciar_sesion_tienda_segura',
+        params: {
+          'p_correo': correo.trim().toLowerCase(),
+          'p_contrasena': contrasena,
+          'p_session_id': sessionId,
+          'p_dispositivo': dispositivo,
+          'p_latitud': latitud,
+          'p_longitud': longitud,
+          'p_precision_metros': precisionMetros,
+        },
+      );
+      if (data == null) {
+        throw Exception('Supabase no devolvió el resultado del inicio.');
+      }
+      return data;
+    } on PostgrestException catch (error) {
+      if (!_esFuncionNoDisponible(error, 'iniciar_sesion_tienda_segura')) {
+        rethrow;
+      }
+      return _iniciarSesionTiendaLegacy(
+        correo: correo,
+        contrasena: contrasena,
+        sessionId: sessionId,
+        dispositivo: dispositivo,
+        latitud: latitud,
+        longitud: longitud,
+        precisionMetros: precisionMetros,
+      );
     }
-
-    return _mapearTienda(data);
   }
 
-  Future<Map<String, dynamic>> asegurarQrEstatico({
+  /// Recupera los datos de la tienda únicamente si la sesión sigue activa.
+  Future<Map<String, dynamic>?> obtenerTiendaSesion({
     required String idTienda,
+    required String sessionId,
   }) async {
-    final data = await _rpcMaybeSingle(
-      'obtener_o_crear_qr_tienda',
-      params: {'p_id_tienda': idTienda},
-    );
+    try {
+      final data = await _rpcMaybeSingle(
+        'obtener_sesion_tienda',
+        params: {'p_id_tienda': idTienda, 'p_session_id': sessionId},
+      );
+      return data == null ? null : _mapearTienda(data);
+    } on PostgrestException catch (error) {
+      if (!_esFuncionNoDisponible(error, 'obtener_sesion_tienda')) {
+        rethrow;
+      }
 
-    if (data == null) {
-      throw Exception('No se encontro un QR para esta tienda.');
+      final validacion = await validarSesionTienda(
+        idTienda: idTienda,
+        sessionId: sessionId,
+      );
+      if (validacion['permitido'] != true) return null;
+
+      final data = await _rpcMaybeSingle(
+        'obtener_tienda_por_id',
+        params: {'p_id_tienda': idTienda},
+      );
+      return data == null ? null : _mapearTienda(data);
     }
-
-    return data;
   }
 
   Future<Map<String, dynamic>> obtenerPayloadQrTienda({
@@ -79,51 +93,11 @@ class SupabaseService {
       params: {'p_id_tienda': idTienda, 'p_session_id': sessionId},
     );
 
-    if (data == null || data['payload'] == null) {
+    final payload = data?['payload']?.toString().trim() ?? '';
+    if (payload.isEmpty) {
       throw Exception('No se pudo generar el QR temporal.');
     }
-
-    return data;
-  }
-
-  String generarPayloadQrDinamico({
-    required String token,
-    DateTime? fechaHora,
-  }) {
-    final timestamp = (fechaHora ?? DateTime.now()).millisecondsSinceEpoch;
-    final slot = timestamp ~/ const Duration(seconds: 30).inMilliseconds;
-    final firma = md5
-        .convert(utf8.encode('${token.trim()}:$slot:qr_dinamico:v2'))
-        .toString();
-
-    return 'app-qr-dinamico://$slot/$firma';
-  }
-
-  Future<Map<String, dynamic>> iniciarSesionTienda({
-    required String idTienda,
-    required String sessionId,
-    required String dispositivo,
-    required double latitud,
-    required double longitud,
-    required double precisionMetros,
-  }) async {
-    final data = await _rpcMaybeSingle(
-      'iniciar_sesion_tienda',
-      params: {
-        'p_id_tienda': idTienda,
-        'p_session_id': sessionId,
-        'p_dispositivo': dispositivo,
-        'p_latitud': latitud,
-        'p_longitud': longitud,
-        'p_precision_metros': precisionMetros,
-      },
-    );
-
-    if (data == null) {
-      throw Exception('No se pudo iniciar la sesion de tienda.');
-    }
-
-    return data;
+    return data!;
   }
 
   Future<Map<String, dynamic>> renovarSesionTienda({
@@ -149,7 +123,6 @@ class SupabaseService {
     if (data == null) {
       throw Exception('No se pudo renovar la sesión de tienda.');
     }
-
     return data;
   }
 
@@ -165,48 +138,60 @@ class SupabaseService {
     if (data == null) {
       throw Exception('No se pudo validar la sesión de tienda.');
     }
-
     return data;
   }
 
-  Future<void> cerrarSesionTienda({
+  Future<bool> cerrarSesionTienda({
     required String idTienda,
     required String sessionId,
   }) async {
-    await _client.rpc(
+    final response = await _client.rpc(
       'cerrar_sesion_tienda',
       params: {'p_id_tienda': idTienda, 'p_session_id': sessionId},
     );
+    return response == true;
   }
 
-  Future<bool> validarQrTienda(String idTienda) async {
-    final data = await _rpcMaybeSingle(
-      'obtener_qr_tienda',
-      params: {'p_id_tienda': idTienda},
-    );
-
-    return data != null;
-  }
-
-  Future<String> registrarMarcacionAsistencia({
-    required String dniTrabajador,
-    DateTime? fechaHora,
-    String? qrPayload,
+  Future<Map<String, dynamic>> _iniciarSesionTiendaLegacy({
+    required String correo,
+    required String contrasena,
+    required String sessionId,
+    required String dispositivo,
+    required double latitud,
+    required double longitud,
+    required double precisionMetros,
   }) async {
-    final data = await _rpcMaybeSingle(
-      'registrar_marcacion_asistencia',
+    final tiendaData = await _rpcMaybeSingle(
+      'login_tienda',
       params: {
-        'p_dni': dniTrabajador.trim(),
-        'p_fecha_hora': (fechaHora ?? DateTime.now()).toIso8601String(),
-        'p_token': qrPayload,
+        'p_correo': correo.trim().toLowerCase(),
+        'p_contrasena': contrasena,
       },
     );
-
-    if (data == null || data['campo_marcado'] == null) {
-      throw Exception('No se pudo registrar la marcacion.');
+    if (tiendaData == null) {
+      return {
+        'permitido': false,
+        'mensaje': 'Correo o contraseña incorrectos.',
+      };
     }
 
-    return data['campo_marcado'].toString();
+    final tienda = _mapearTienda(tiendaData);
+    final sesion = await _rpcMaybeSingle(
+      'iniciar_sesion_tienda',
+      params: {
+        'p_id_tienda': tienda['id_tienda'],
+        'p_session_id': sessionId,
+        'p_dispositivo': dispositivo,
+        'p_latitud': latitud,
+        'p_longitud': longitud,
+        'p_precision_metros': precisionMetros,
+      },
+    );
+    if (sesion == null) {
+      throw Exception('No se pudo iniciar la sesión de tienda.');
+    }
+
+    return {...tienda, ...sesion};
   }
 
   Future<Map<String, dynamic>?> _rpcMaybeSingle(
@@ -215,29 +200,36 @@ class SupabaseService {
   }) async {
     final response = await _client.rpc(functionName, params: params);
 
-    if (response == null) {
-      return null;
-    }
-
+    if (response == null) return null;
     if (response is List) {
       if (response.isEmpty) return null;
-      return Map<String, dynamic>.from(response.first as Map);
+      final first = response.first;
+      if (first is! Map) {
+        throw FormatException('Respuesta inválida de $functionName.');
+      }
+      return Map<String, dynamic>.from(first);
     }
+    if (response is! Map) {
+      throw FormatException('Respuesta inválida de $functionName.');
+    }
+    return Map<String, dynamic>.from(response);
+  }
 
-    return Map<String, dynamic>.from(response as Map);
+  bool _esFuncionNoDisponible(PostgrestException error, String functionName) {
+    return error.code == 'PGRST202' ||
+        error.code == '42883' ||
+        error.message.contains(functionName);
   }
 
   Map<String, dynamic> _mapearTienda(Map<String, dynamic> data) {
-    final nombre = (data['nombre'] ?? '').toString();
     return {
       'id_tienda': (data['id_tienda'] ?? '').toString(),
-      'nombre': nombre,
+      'nombre': (data['nombre'] ?? '').toString().trim(),
       'correo': (data['correo'] ?? '').toString().trim(),
-      'contrasena': (data['contrasena'] ?? '').toString(),
-      'telefono': (data['telefono'] ?? '').toString(),
-      'direccion': (data['direccion'] ?? '').toString(),
+      'telefono': (data['telefono'] ?? '').toString().trim(),
+      'direccion': (data['direccion'] ?? '').toString().trim(),
       'fecha_apertura': data['fecha_apertura']?.toString() ?? '',
-      'estado': data['estado']?.toString() ?? '',
+      'estado': data['estado'] == true,
     };
   }
 }

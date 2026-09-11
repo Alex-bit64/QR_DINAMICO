@@ -16,7 +16,7 @@ void main() async {
   }
   await Supabase.initialize(
     url: SupabaseOptions.supabaseUrl,
-    anonKey: SupabaseOptions.supabaseKey,
+    publishableKey: SupabaseOptions.supabaseKey,
   );
   runApp(const QRApp());
 }

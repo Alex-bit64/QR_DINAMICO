@@ -6,7 +6,7 @@ plugins {
 }
 
 android {
-    namespace = "com.example.qr_dinamico"
+    namespace = "com.alexbit64.qrsucursal"
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
 
@@ -20,7 +20,8 @@ android {
     }
 
     defaultConfig {
-        // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
+        // Se conserva el identificador publicado para que una actualización no
+        // se instale como otra app ni deje una sesión anterior inaccesible.
         applicationId = "com.example.qr_dinamico"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
