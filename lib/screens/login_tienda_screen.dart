@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
 import '../app_visuals.dart';
+import '../services/actualizacion_service.dart';
 import '../services/sesion_local_service.dart';
 import '../services/supabase_service.dart';
 import '../services/ubicacion_service.dart';
@@ -25,6 +26,7 @@ class _LoginTiendaScreenState extends State<LoginTiendaScreen> {
   final _supabaseService = SupabaseService.instance;
   final _ubicacionService = UbicacionService.instance;
   final _sesionLocalService = SesionLocalService.instance;
+  final _actualizacionService = ActualizacionService.instance;
 
   bool _cargando = true;
   bool _procesando = false;
@@ -44,6 +46,9 @@ class _LoginTiendaScreenState extends State<LoginTiendaScreen> {
 
   Future<void> _verificarSesionGuardada() async {
     try {
+      await _comprobarActualizacion();
+      if (!mounted) return;
+
       final sesionLocal = await _sesionLocalService.cargar();
       if (sesionLocal != null) {
         final tiendaActual = await _supabaseService.obtenerTiendaSesion(
@@ -102,6 +107,113 @@ class _LoginTiendaScreenState extends State<LoginTiendaScreen> {
             ? error.mensaje
             : 'No se pudo comprobar la sesión guardada. Revisa tu conexión.';
       });
+    }
+  }
+
+  Future<void> _comprobarActualizacion() async {
+    try {
+      final actualizacion = await _actualizacionService.comprobar();
+      if (actualizacion == null || !mounted) return;
+
+      final descargar = await showDialog<bool>(
+        context: context,
+        barrierDismissible: true,
+        builder: (dialogContext) {
+          final brightness = Theme.of(dialogContext).brightness;
+          final textColor = AppPalette.textColor(brightness);
+          final mutedColor = AppPalette.mutedTextColor(brightness);
+          return AlertDialog(
+            backgroundColor: AppPalette.panelColor(brightness),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(24),
+            ),
+            titlePadding: const EdgeInsets.fromLTRB(24, 20, 12, 0),
+            title: Row(
+              children: [
+                const Icon(
+                  Icons.system_update_alt_rounded,
+                  color: AppPalette.turquoise,
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    'Actualización disponible',
+                    style: GoogleFonts.bebasNeue(
+                      color: textColor,
+                      fontSize: 24,
+                      letterSpacing: 1,
+                    ),
+                  ),
+                ),
+                IconButton(
+                  tooltip: 'Cerrar',
+                  onPressed: () => Navigator.pop(dialogContext, false),
+                  icon: Icon(Icons.close_rounded, color: mutedColor),
+                ),
+              ],
+            ),
+            content: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 420),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    actualizacion.mensaje,
+                    style: GoogleFonts.robotoCondensed(
+                      color: textColor,
+                      fontSize: 16,
+                      height: 1.35,
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  Text(
+                    'Instalada: ${actualizacion.versionActual} '
+                    '(${actualizacion.buildActual})\n'
+                    'Disponible: ${actualizacion.versionPublicada} '
+                    '(${actualizacion.buildPublicado})',
+                    style: GoogleFonts.robotoCondensed(
+                      color: mutedColor,
+                      fontSize: 14,
+                      height: 1.45,
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Text(
+                    'Puedes continuar ahora. El aviso volverá a aparecer la '
+                    'próxima vez que abras la aplicación.',
+                    style: GoogleFonts.robotoCondensed(
+                      color: mutedColor,
+                      fontSize: 13,
+                      height: 1.35,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dialogContext, false),
+                child: const Text('Ahora no'),
+              ),
+              FilledButton.icon(
+                onPressed: () => Navigator.pop(dialogContext, true),
+                icon: const Icon(Icons.download_rounded),
+                label: const Text('Actualizar'),
+              ),
+            ],
+          );
+        },
+      );
+
+      if (descargar != true) return;
+      final abierto = await _actualizacionService.abrirDescarga(actualizacion);
+      if (!abierto) {
+        _mostrarMensaje('No se pudo abrir el enlace de actualización.');
+      }
+    } catch (_) {
+      // La comprobación es opcional: una caída de red o un RPC aún no aplicado
+      // nunca debe impedir restaurar o iniciar la sesión de la tienda.
     }
   }
 

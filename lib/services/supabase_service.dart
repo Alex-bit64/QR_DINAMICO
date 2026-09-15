@@ -1,9 +1,14 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import 'informacion_aplicacion_service.dart';
+
 class SupabaseService {
   SupabaseService._();
 
   static final SupabaseService instance = SupabaseService._();
+
+  final _informacionAplicacionService = InformacionAplicacionService.instance;
+  bool? _rpcVersionSesionDisponible;
 
   SupabaseClient get _client => Supabase.instance.client;
 
@@ -21,6 +26,20 @@ class SupabaseService {
     required double longitud,
     required double precisionMetros,
   }) async {
+    final informacion = await _obtenerInformacionSegura(dispositivo);
+
+    if (_rpcVersionSesionDisponible == false) {
+      return _iniciarSesionTiendaSeguraCompatible(
+        correo: correo,
+        contrasena: contrasena,
+        sessionId: sessionId,
+        dispositivo: dispositivo,
+        latitud: latitud,
+        longitud: longitud,
+        precisionMetros: precisionMetros,
+      );
+    }
+
     try {
       final data = await _rpcMaybeSingle(
         'iniciar_sesion_tienda_segura',
@@ -32,17 +51,22 @@ class SupabaseService {
           'p_latitud': latitud,
           'p_longitud': longitud,
           'p_precision_metros': precisionMetros,
+          'p_version_aplicacion': informacion.version,
+          'p_build_aplicacion': informacion.build,
         },
       );
       if (data == null) {
         throw Exception('Supabase no devolvió el resultado del inicio.');
       }
+      _rpcVersionSesionDisponible = true;
       return data;
     } on PostgrestException catch (error) {
       if (!_esFuncionNoDisponible(error, 'iniciar_sesion_tienda_segura')) {
         rethrow;
       }
-      return _iniciarSesionTiendaLegacy(
+
+      _rpcVersionSesionDisponible = false;
+      return _iniciarSesionTiendaSeguraCompatible(
         correo: correo,
         contrasena: contrasena,
         sessionId: sessionId,
@@ -52,6 +76,24 @@ class SupabaseService {
         precisionMetros: precisionMetros,
       );
     }
+  }
+
+  /// Consulta la versión publicada para la plataforma actual.
+  ///
+  /// Devuelve `null` cuando todavía no se ha publicado una fila activa.
+  Future<Map<String, dynamic>?> obtenerActualizacionAplicacion({
+    required String plataforma,
+    required String versionActual,
+    required int buildActual,
+  }) {
+    return _rpcMaybeSingle(
+      'obtener_actualizacion_aplicacion',
+      params: {
+        'p_plataforma': plataforma,
+        'p_version_actual': versionActual,
+        'p_build_actual': buildActual,
+      },
+    );
   }
 
   /// Recupera los datos de la tienda únicamente si la sesión sigue activa.
@@ -108,17 +150,44 @@ class SupabaseService {
     required double longitud,
     required double precisionMetros,
   }) async {
-    final data = await _rpcMaybeSingle(
-      'renovar_sesion_tienda',
-      params: {
-        'p_id_tienda': idTienda,
-        'p_session_id': sessionId,
-        'p_dispositivo': dispositivo,
-        'p_latitud': latitud,
-        'p_longitud': longitud,
-        'p_precision_metros': precisionMetros,
-      },
-    );
+    final informacion = await _obtenerInformacionSegura(dispositivo);
+    Map<String, dynamic>? data;
+
+    if (_rpcVersionSesionDisponible != false) {
+      try {
+        data = await _rpcMaybeSingle(
+          'renovar_sesion_tienda',
+          params: {
+            'p_id_tienda': idTienda,
+            'p_session_id': sessionId,
+            'p_dispositivo': dispositivo,
+            'p_latitud': latitud,
+            'p_longitud': longitud,
+            'p_precision_metros': precisionMetros,
+            'p_version_aplicacion': informacion.version,
+            'p_build_aplicacion': informacion.build,
+          },
+        );
+        _rpcVersionSesionDisponible = true;
+      } on PostgrestException catch (error) {
+        if (!_esFuncionNoDisponible(error, 'renovar_sesion_tienda')) rethrow;
+        _rpcVersionSesionDisponible = false;
+      }
+    }
+
+    if (_rpcVersionSesionDisponible == false) {
+      data = await _rpcMaybeSingle(
+        'renovar_sesion_tienda',
+        params: {
+          'p_id_tienda': idTienda,
+          'p_session_id': sessionId,
+          'p_dispositivo': dispositivo,
+          'p_latitud': latitud,
+          'p_longitud': longitud,
+          'p_precision_metros': precisionMetros,
+        },
+      );
+    }
 
     if (data == null) {
       throw Exception('No se pudo renovar la sesión de tienda.');
@@ -194,6 +263,48 @@ class SupabaseService {
     return {...tienda, ...sesion};
   }
 
+  Future<Map<String, dynamic>> _iniciarSesionTiendaSeguraCompatible({
+    required String correo,
+    required String contrasena,
+    required String sessionId,
+    required String dispositivo,
+    required double latitud,
+    required double longitud,
+    required double precisionMetros,
+  }) async {
+    try {
+      final data = await _rpcMaybeSingle(
+        'iniciar_sesion_tienda_segura',
+        params: {
+          'p_correo': correo.trim().toLowerCase(),
+          'p_contrasena': contrasena,
+          'p_session_id': sessionId,
+          'p_dispositivo': dispositivo,
+          'p_latitud': latitud,
+          'p_longitud': longitud,
+          'p_precision_metros': precisionMetros,
+        },
+      );
+      if (data == null) {
+        throw Exception('Supabase no devolvió el resultado del inicio.');
+      }
+      return data;
+    } on PostgrestException catch (error) {
+      if (!_esFuncionNoDisponible(error, 'iniciar_sesion_tienda_segura')) {
+        rethrow;
+      }
+      return _iniciarSesionTiendaLegacy(
+        correo: correo,
+        contrasena: contrasena,
+        sessionId: sessionId,
+        dispositivo: dispositivo,
+        latitud: latitud,
+        longitud: longitud,
+        precisionMetros: precisionMetros,
+      );
+    }
+  }
+
   Future<Map<String, dynamic>?> _rpcMaybeSingle(
     String functionName, {
     required Map<String, dynamic> params,
@@ -215,10 +326,22 @@ class SupabaseService {
     return Map<String, dynamic>.from(response);
   }
 
-  bool _esFuncionNoDisponible(PostgrestException error, String functionName) {
-    return error.code == 'PGRST202' ||
-        error.code == '42883' ||
-        error.message.contains(functionName);
+  bool _esFuncionNoDisponible(PostgrestException error, String _) {
+    return error.code == 'PGRST202' || error.code == '42883';
+  }
+
+  Future<InformacionAplicacion> _obtenerInformacionSegura(
+    String dispositivo,
+  ) async {
+    try {
+      return await _informacionAplicacionService.obtener();
+    } catch (_) {
+      return InformacionAplicacion(
+        version: '',
+        build: 0,
+        plataforma: dispositivo.trim().toLowerCase(),
+      );
+    }
   }
 
   Map<String, dynamic> _mapearTienda(Map<String, dynamic> data) {

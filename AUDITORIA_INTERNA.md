@@ -1,6 +1,6 @@
-# Auditoría interna — QR Sucursal 1.1.0
+# Auditoría interna — QR Sucursal 1.2.0
 
-Fecha: 10 de septiembre de 2026.
+Fecha: 15 de septiembre de 2026.
 
 ## Alcance
 
@@ -44,6 +44,13 @@ Windows, Linux y Codemagic.
   firma.
 - Se eliminó `lib.zip`, una copia obsoleta que contenía código de una versión
   anterior y podía confundirse con la fuente vigente del proyecto.
+- Se añadió un catálogo de versiones protegido con RLS y un RPC de lectura que
+  compara builds enteros por plataforma. El aviso de actualización es opcional,
+  se puede cerrar y vuelve a aparecer en el próximo inicio.
+- Los RPC de inicio y renovación registran la versión, build y plataforma de la
+  sesión activa sin retirar compatibilidad a la versión 1.1.
+- Las descargas solo aceptan enlaces HTTPS. El bucket no concede permisos de
+  carga o modificación a clientes públicos.
 
 ## Controles funcionales
 
@@ -54,6 +61,8 @@ Windows, Linux y Codemagic.
   explícitamente en Supabase.
 - Otra computadora o celular no puede tomar una tienda mientras la fila siga
   marcada como usada por una sesión distinta.
+- Un fallo al consultar actualizaciones nunca bloquea el inicio ni la
+  restauración de sesión.
 
 ## Verificación y límite del entorno
 
@@ -61,7 +70,7 @@ Se ejecutan `flutter analyze`, pruebas automatizadas y builds release de
 Windows y Android antes de publicar. El build iOS debe ejecutarse en Codemagic,
 porque Xcode solo está disponible en macOS.
 
-La migración está versionada, pero debe aplicarse al proyecto Supabase antes de
-considerar desplegadas las correcciones del servidor. El CLI de este equipo no
-tiene una sesión de Supabase iniciada, por lo que no se modifica la base remota
-desde este repositorio.
+Las migraciones están versionadas, pero deben aplicarse al proyecto Supabase
+antes de considerar desplegadas las correcciones del servidor. El CLI de este
+equipo no tiene una sesión de Supabase iniciada, por lo que no se modifica la
+base remota desde este repositorio.
