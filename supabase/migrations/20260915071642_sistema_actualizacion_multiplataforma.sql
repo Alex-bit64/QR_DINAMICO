@@ -334,7 +334,7 @@ INSERT INTO public.version_aplicacion (
         'android',
         '1.2.0',
         3,
-        'https://tlmsnenvqqblmmtimung.supabase.co/storage/v1/object/public/actualizaciones/qr-sucursal/android/qr-sucursal.apk?download=QR_Sucursal.apk',
+        'https://tlmsnenvqqblmmtimung.supabase.co/storage/v1/object/public/actualizaciones/qr-sucursal/android/1.2.0/qr-sucursal.apk?download=QR_Sucursal.apk',
         '8abc5e72a96228d2b61a4a87d03c489026821362ee8082da7aa9c1d84c7bf353',
         'Hay una nueva versión de QR Sucursal para Android.',
         FALSE
@@ -343,7 +343,7 @@ INSERT INTO public.version_aplicacion (
         'windows',
         '1.2.0',
         3,
-        'https://tlmsnenvqqblmmtimung.supabase.co/storage/v1/object/public/actualizaciones/qr-sucursal/windows/QR_Sucursal_Windows_x64_COMPLETO.zip?download=QR_Sucursal_Windows_x64_COMPLETO.zip',
+        'https://tlmsnenvqqblmmtimung.supabase.co/storage/v1/object/public/actualizaciones/qr-sucursal/windows/1.2.0/QR_Sucursal_Windows_x64_COMPLETO.zip?download=QR_Sucursal_Windows_x64_COMPLETO.zip',
         'd2f24bb58cf986aaedef612660835a0f459b2a49ba77a041b1b43b760fd4e920',
         'Hay una nueva versión de QR Sucursal para Windows.',
         FALSE

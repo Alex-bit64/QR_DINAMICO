@@ -98,9 +98,9 @@ La migración deja Android y Windows en `activa=false` para que nunca se muestre
 un enlace roto. Para publicar `1.2.0+3`:
 
 1. Cargar el APK en el bucket `actualizaciones` con la ruta
-   `qr-sucursal/android/qr-sucursal.apk`.
+   `qr-sucursal/android/1.2.0/qr-sucursal.apk`.
 2. Cargar el ZIP completo de Windows con la ruta
-   `qr-sucursal/windows/QR_Sucursal_Windows_x64_COMPLETO.zip`.
+   `qr-sucursal/windows/1.2.0/QR_Sucursal_Windows_x64_COMPLETO.zip`.
 3. Comprobar ambas descargas y cambiar a `true` la columna `activa` de Android y
    Windows en la tabla `version_aplicacion`.
 
@@ -110,9 +110,11 @@ puede cargarse en Supabase Free. Los emuladores Android x86 no están incluidos
 en ese APK de distribución.
 
 Para cada actualización futura se incrementan siempre la versión y el build de
-`pubspec.yaml`, se reemplaza el archivo de la plataforma y después se actualizan
-`version_publicada`, `build_publicado`, `mensaje`, `sha256` y
-`actualizada_en=now()` en Supabase. En iOS se crea una fila `ios` cuya
+`pubspec.yaml`, se carga el archivo en una carpeta nueva con el número de versión
+y después se actualizan `version_publicada`, `build_publicado`, `url_descarga`,
+`mensaje`, `sha256` y `actualizada_en=now()` en Supabase. Usar una ruta nueva
+evita que la CDN entregue durante un tiempo el instalador anterior. En iOS se
+crea una fila `ios` cuya
 `url_descarga` sea el enlace de TestFlight o App Store; iOS no instala APK.
 
 La versión `1.2.0+3` debe instalarse una vez por el método actual, porque las
