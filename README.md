@@ -104,6 +104,11 @@ un enlace roto. Para publicar `1.2.0+3`:
 3. Comprobar ambas descargas y cambiar a `true` la columna `activa` de Android y
    Windows en la tabla `version_aplicacion`.
 
+El APK de distribución se genera para `android-arm` y `android-arm64`, las dos
+arquitecturas de celulares físicos antiguos y modernos. Pesa menos de 50 MB y
+puede cargarse en Supabase Free. Los emuladores Android x86 no están incluidos
+en ese APK de distribución.
+
 Para cada actualización futura se incrementan siempre la versión y el build de
 `pubspec.yaml`, se reemplaza el archivo de la plataforma y después se actualizan
 `version_publicada`, `build_publicado`, `mensaje`, `sha256` y
@@ -152,7 +157,7 @@ Localización. Linux requiere que el servicio GeoClue esté disponible.
 flutter analyze
 flutter test
 flutter build windows
-flutter build apk --release
+flutter build apk --release --target-platform android-arm,android-arm64
 ```
 
 El resultado de la auditoría interna y sus controles se encuentra en

@@ -307,7 +307,7 @@ INSERT INTO storage.buckets (
     'actualizaciones',
     'actualizaciones',
     TRUE,
-    209715200,
+    50000000,
     ARRAY[
         'application/vnd.android.package-archive',
         'application/zip',
@@ -335,7 +335,7 @@ INSERT INTO public.version_aplicacion (
         '1.2.0',
         3,
         'https://tlmsnenvqqblmmtimung.supabase.co/storage/v1/object/public/actualizaciones/qr-sucursal/android/qr-sucursal.apk?download=QR_Sucursal.apk',
-        '385e929c8a094c33c66d417a7b4f9eb28dbedbaac124c0d2269f8f9d9e0f5e1d',
+        '8abc5e72a96228d2b61a4a87d03c489026821362ee8082da7aa9c1d84c7bf353',
         'Hay una nueva versión de QR Sucursal para Android.',
         FALSE
     ),
