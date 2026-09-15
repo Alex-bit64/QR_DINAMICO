@@ -65,6 +65,7 @@ Editor o con Supabase CLI:
 
 - [`20260911044121_endurecer_sesion_qr_tienda.sql`](supabase/migrations/20260911044121_endurecer_sesion_qr_tienda.sql)
 - [`20260915071642_sistema_actualizacion_multiplataforma.sql`](supabase/migrations/20260915071642_sistema_actualizacion_multiplataforma.sql)
+- [`20260915075447_permitir_zip_windows.sql`](supabase/migrations/20260915075447_permitir_zip_windows.sql)
 
 Para una instalación nueva se ejecuta primero
 [`supabase_rpc.sql`](supabase_rpc.sql) y después la migración del sistema de
@@ -75,7 +76,10 @@ exponían datos o permitían reservar una tienda conociendo solo su identificado
 
 La segunda migración crea el catálogo de versiones, el bucket público de solo
 descarga y los RPC compatibles que registran la versión del dispositivo activo.
-Si la primera migración ya fue ejecutada, solo se debe ejecutar la segunda.
+Si la primera migración ya fue ejecutada, solo se deben ejecutar la segunda y
+la tercera.
+La tercera admite también `application/x-zip-compressed`, que es el MIME que el
+selector de archivos de Windows puede asignar a un ZIP válido.
 
 El cliente usa una clave publicable. Nunca coloques una clave `service_role` o
 secreta dentro de Flutter.
