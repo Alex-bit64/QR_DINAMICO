@@ -81,6 +81,17 @@ la tercera.
 La tercera admite también `application/x-zip-compressed`, que es el MIME que el
 selector de archivos de Windows puede asignar a un ZIP válido.
 
+Por solicitud del propietario, el 17 de septiembre de 2026 se cambió la
+autenticación de tiendas a texto plano. Ejecutar al final, después de las
+migraciones anteriores,
+[`20260917132104_contrasenas_tienda_texto_plano.sql`](supabase/migrations/20260917132104_contrasenas_tienda_texto_plano.sql):
+restablece todas las contraseñas de `tienda` a `123` y los RPC las comparan
+directamente, sin hash. No cambia trabajadores, administradores, sesiones ni
+el estado de las tiendas. La app ya envía la contraseña ingresada por HTTPS;
+este cambio del servidor no requiere recompilar ni publicar instaladores.
+Esta configuración elimina la protección del hash y utiliza una contraseña
+compartida fácil de adivinar. La migración reemplaza las contraseñas anteriores.
+
 El cliente usa una clave publicable. Nunca coloques una clave `service_role` o
 secreta dentro de Flutter.
 

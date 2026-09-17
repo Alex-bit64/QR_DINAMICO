@@ -2,6 +2,12 @@
 
 Fecha: 15 de septiembre de 2026.
 
+Nota posterior (17 de septiembre de 2026): por solicitud del propietario,
+`20260917132104_contrasenas_tienda_texto_plano.sql` reemplaza el uso de bcrypt
+para tiendas por comparación en texto plano y restablece sus contraseñas a
+`123`. El hallazgo de protección de contraseñas descrito abajo corresponde a
+la auditoría original, no a la configuración actual.
+
 ## Alcance
 
 Se revisaron el cliente Flutter, el flujo de sesión y ubicación, los RPC de
